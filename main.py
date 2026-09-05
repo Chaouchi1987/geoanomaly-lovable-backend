@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 
-app = FastAPI(title="GeoAnomaly Lovable Backend", version="0.3.1")
+app = FastAPI(title="GeoAnomaly Lovable Backend", version="0.4.0-sentinel2-ndvi")
 
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "*").split(",") if x.strip()]
 app.add_middleware(
@@ -175,7 +175,7 @@ def geometry_for(aoi: dict[str, Any]):
 def root():
     return {
         "service": "GeoAnomaly Lovable Backend",
-        "version": "0.3.1",
+        "version": "0.4.0-sentinel2-ndvi",
         "policy": "No synthetic scientific results",
     }
 
@@ -185,7 +185,7 @@ def health():
     return {
         "status": "ok",
         "service": "geoanomaly-backend",
-        "version": "0.3.1",
+        "version": "0.4.0-sentinel2-ndvi",
     }
 
 
@@ -300,14 +300,78 @@ def run_analysis(run_id: str, request: dict[str, Any]):
             "statistics": stats,
             "synthetic": False,
         }]
-        run["layers"] = []
+
+        # ------------------------------------------------------------------
+        # Real Sentinel-2 derived layer: NDVI
+        #
+        # This is intentionally the first production layer. It is derived
+        # directly from the real Sentinel-2 composite already acquired above.
+        # No synthetic raster, coordinates, or target scores are generated.
+        # ------------------------------------------------------------------
+        ndvi = image.normalizedDifference(["B8", "B4"]).rename("NDVI")
+
+        ndvi_stats = ndvi.reduceRegion(
+            reducer=ee.Reducer.mean()
+                .combine(ee.Reducer.min(), sharedInputs=True)
+                .combine(ee.Reducer.max(), sharedInputs=True),
+            geometry=geom,
+            scale=int(request.get("scale_m") or 10),
+            maxPixels=1_000_000,
+            bestEffort=True,
+        ).getInfo()
+
+        # Earth Engine returns a temporary map tile URL for this real image.
+        # The frontend can consume tile_url with a standard XYZ tile layer.
+        map_id = ndvi.getMapId({
+            "min": -1,
+            "max": 1,
+            "palette": [
+                "FFFFFF",
+                "CE7E45",
+                "DF923D",
+                "F1B555",
+                "FCD163",
+                "99B718",
+                "74A901",
+                "66A000",
+                "529400",
+                "3E8601",
+                "207401",
+                "056201",
+                "004C00",
+                "023B01",
+                "012E01",
+                "011D01",
+                "011301",
+            ],
+        })
+
+        tile_url = map_id["tile_fetcher"].url_format
+
+        run["layers"] = [{
+            "id": "sentinel2-ndvi",
+            "name": "Sentinel-2 NDVI",
+            "title": "Sentinel-2 NDVI",
+            "source": "Sentinel-2 SR Harmonized",
+            "dataset": "COPERNICUS/S2_SR_HARMONIZED",
+            "type": "raster",
+            "kind": "raster",
+            "tile_url": tile_url,
+            "url": tile_url,
+            "opacity": 0.85,
+            "min": -1,
+            "max": 1,
+            "resolution_m": 10,
+            "statistics": ndvi_stats,
+            "synthetic": False,
+        }]
         run["targets"] = []
 
         run.update(
             status="completed",
             stage="completed",
             progress=1.0,
-            message="Real Sentinel-2 acquisition completed. No target inference pipeline is enabled yet.",
+            message="Real Sentinel-2 acquisition and NDVI layer generation completed. Target inference pipeline is not enabled yet.",
             completed_at=now(),
         )
 
