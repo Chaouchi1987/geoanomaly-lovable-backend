@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: geoanomaly-lovable-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GOOGLE_CLOUD_PROJECT
+        sync: false
+      - key: EARTHENGINE_CREDENTIALS_JSON
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
